@@ -27,13 +27,16 @@ async def on_ready():
 async def upload(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
+    if not interaction.user or not interaction.channel:
+        raise ValueError("User and channel must be defined in interaction")
+
     token = uuid.uuid4().hex
     expires = datetime.utcnow() + timedelta(minutes=15)
 
     db = await get_db()
     await db.execute(
         "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "embed"),
+        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id) if interaction.guild_id else None, expires, "embed"),
     )
     await db.commit()
     await db.close()
@@ -49,13 +52,16 @@ async def upload(interaction: discord.Interaction):
 async def downsize(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
+    if not interaction.user or not interaction.channel:
+        raise ValueError("User and channel must be defined in interaction")
+
     token = uuid.uuid4().hex
     expires = datetime.utcnow() + timedelta(minutes=15)
 
     db = await get_db()
     await db.execute(
         "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "download"),
+        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id) if interaction.guild_id else None, expires, "download"),
     )
     await db.commit()
     await db.close()

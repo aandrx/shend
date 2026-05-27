@@ -26,7 +26,7 @@ Path("templates").mkdir(exist_ok=True)
 
 
 @app.get("/upload", response_class=HTMLResponse)
-async def upload_form(token: str = Query(...)):
+async def upload_form(request: Request, token: str = Query(...)):
     db = await get_db()
     row = await db.execute(
         "SELECT * FROM uploads WHERE token = ? AND status = 'pending' AND expires_at > ?",
@@ -38,7 +38,7 @@ async def upload_form(token: str = Query(...)):
     if not upload:
         raise HTTPException(403, "Invalid or expired token")
 
-    return templates.TemplateResponse("upload.html", {"request": {}, "token": token})
+    return templates.TemplateResponse(request=request, name="upload.html", context={"token": token})
 
 
 @app.post("/upload")
