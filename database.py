@@ -14,7 +14,7 @@ async def init_db():
                 channel_id TEXT NOT NULL,
                 guild_id TEXT NOT NULL,
                 original_filename TEXT,
-                internal_path TEXT NOT NULL,
+                internal_path TEXT,              -- REMOVED NOT NULL
                 original_size_bytes INTEGER,
                 compressed_size_bytes INTEGER,
                 status TEXT DEFAULT 'pending',
