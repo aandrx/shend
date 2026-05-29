@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from config import settings
-from database import get_db
+from database import get_db, init_db
 
 
 intents = discord.Intents.default()
@@ -16,6 +16,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"Shend logged in as {bot.user}")
+    
+    # Initialize database on startup
+    await init_db()
+    
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash commands")
@@ -26,17 +30,17 @@ async def on_ready():
 @bot.tree.command(name="upload", description="Get a link to upload a video that embeds inline in chat")
 async def upload(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-
-    if not interaction.user or not interaction.channel:
-        raise ValueError("User and channel must be defined in interaction")
-
+    
+    # Ensure DB exists
+    await init_db()
+    
     token = uuid.uuid4().hex
     expires = datetime.utcnow() + timedelta(minutes=15)
 
     db = await get_db()
     await db.execute(
         "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id) if interaction.guild_id else None, expires, "embed"),
+        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "embed"),
     )
     await db.commit()
     await db.close()
@@ -51,17 +55,17 @@ async def upload(interaction: discord.Interaction):
 @bot.tree.command(name="downsize", description="Get a link to upload a large video and receive a <10MB download")
 async def downsize(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-
-    if not interaction.user or not interaction.channel:
-        raise ValueError("User and channel must be defined in interaction")
-
+    
+    # Ensure DB exists
+    await init_db()
+    
     token = uuid.uuid4().hex
     expires = datetime.utcnow() + timedelta(minutes=15)
 
     db = await get_db()
     await db.execute(
         "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id) if interaction.guild_id else None, expires, "download"),
+        (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "download"),
     )
     await db.commit()
     await db.close()
