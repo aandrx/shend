@@ -1,4 +1,4 @@
-# Shend — Discord Video Bot
+# shend
 
 Self-hosted Discord bot that compresses large videos to under 10MB and serves them back as inline embeds or direct downloads. Runs 24/7 on a home server with zero port forwarding.
 
@@ -18,10 +18,11 @@ Self-hosted Discord bot that compresses large videos to under 10MB and serves th
 |---|---|
 | `/upload` | DMs a private upload link. Video compresses and embeds inline in Discord chat. |
 | `/downsize` | DMs a private upload link. Video compresses and returns a download link privately in the same channel. |
+| `/status` | Messages a status update with uptime, storage usage, and video count. |
 
 ## Local Development
 
-Requires Python 3.11+ and FFmpeg installed locally.
+Requires Python 3.11+ and FFmpeg installed locally 
 
 ```bash
 git clone https://github.com/YOURNAME/shend.git
