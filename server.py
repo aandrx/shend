@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 from datetime import datetime, timedelta
 import aiohttp
+import time
 
 from config import settings
 from database import init_db, get_db
@@ -43,6 +44,7 @@ async def upload_form(request: Request, token: str = Query(...)):
 
 @app.post("/upload")
 async def upload_receive(token: str = Query(...), video: UploadFile = File(...)):
+    start_time = time.time()
     print(f"[WEB] Upload started for token: {token}")
     print(f"[WEB] File: {video.filename}, size: {video.size} bytes")
 
@@ -60,7 +62,9 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
 
     user_id = job[1]
     channel_id = job[2]
-    mode = job[10]
+    mode = job[12]  # mode column
+    interaction_token = job[5]
+    application_id = job[6]
     original_name = video.filename or "upload.mp4"
 
     print(f"[WEB] User: {user_id}, Mode: {mode}, Channel: {channel_id}")
@@ -94,6 +98,7 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
     print(f"[WEB] Saved temp file")
 
     print("[WEB] Starting FFmpeg compression...")
+    compress_start = time.time()
     try:
         await compress_to_target(temp_input, temp_output)
     except Exception as e:
@@ -104,13 +109,17 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         temp_input.unlink(missing_ok=True)
         raise HTTPException(500, f"Compression failed: {e}")
 
+    compress_time = time.time() - compress_start
     size = temp_output.stat().st_size
-    print(f"[WEB] Compression complete: {size} bytes ({size / 1024 / 1024:.1f}MB)")
+    print(f"[WEB] Compression complete in {compress_time:.1f}s: {size} bytes ({size / 1024 / 1024:.1f}MB)")
 
     # Preserve original name for download mode
     safe_name = "".join(c for c in original_name if c.isalnum() or c in "._-").rstrip()
     base_name = Path(safe_name).stem
     output_name = f"{base_name}_downsized.mp4"
+
+    total_time = time.time() - start_time
+    print(f"[WEB] Total processing time: {total_time:.1f}s")
 
     if mode == "embed":
         final_path = settings.storage_path / "uploads" / f"{token}.mp4"
@@ -139,15 +148,15 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         await db.commit()
         await db.close()
 
-        print("[WEB] Posting download link to Discord channel (ephemeral)")
-        await post_downsize_to_channel(channel_id, user_id, token, output_name, size)
+        print("[WEB] Sending ephemeral download link")
+        await post_downsize_ephemeral(interaction_token, application_id, user_id, token, output_name, size)
 
     temp_input.unlink(missing_ok=True)
     print("[WEB] Cleaned up temp input")
 
     result_url = f"{settings.base_url}/v/{token}" if mode == "embed" else f"{settings.base_url}/d/{token}"
     print(f"[WEB] Done. Result URL: {result_url}")
-    return {"status": "complete", "url": result_url}
+    return {"status": "complete", "url": result_url, "time_seconds": round(total_time, 1)}
 
 
 @app.get("/v/{token}", response_class=HTMLResponse)
@@ -227,7 +236,6 @@ async def download_file(token: str):
     if not file_path.exists():
         raise HTTPException(404)
 
-    # Use original filename with _downsized for download
     safe_name = "".join(c for c in original_name if c.isalnum() or c in "._-").rstrip()
     base_name = Path(safe_name).stem
     download_name = f"{base_name}_downsized.mp4"
@@ -258,25 +266,52 @@ async def post_to_channel(channel_id: str, token: str):
                 print(f"[WEB] Posted to channel successfully")
 
 
-async def post_downsize_to_channel(channel_id: str, user_id: str, token: str, filename: str, size: int):
-    # Post ephemeral message in the same channel where /downsize was called
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+async def post_downsize_ephemeral(interaction_token: str, application_id: str, user_id: str, token: str, filename: str, size: int):
+    """Send ephemeral followup message for /downsize using Discord's webhook."""
+    url = f"https://discord.com/api/v10/webhooks/{application_id}/{interaction_token}"
     headers = {
-        "Authorization": f"Bot {settings.bot_token}",
         "Content-Type": "application/json",
     }
     
-    # Use @mention to notify the user privately in channel
     payload = {
-        "content": f"<@{user_id}> Your video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}",
-        "allowed_mentions": {
-            "users": [user_id]
-        }
+        "content": f"Your compressed video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}",
+        "flags": 64,  # EPHEMERAL flag
     }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status not in (200, 204):
-                print(f"[WEB] Failed to post downsize to channel: {resp.status}")
+                print(f"[WEB] Failed to send ephemeral followup: {resp.status}")
+                # Fallback: DM the user
+                await dm_user(user_id, token, size)
             else:
-                print(f"[WEB] Posted downsize link to channel successfully")
+                print(f"[WEB] Sent ephemeral followup successfully")
+
+
+async def dm_user(user_id: str, token: str, size: int):
+    """Fallback DM if ephemeral fails."""
+    url = "https://discord.com/api/v10/users/@me/channels"
+    headers = {
+        "Authorization": f"Bot {settings.bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"recipient_id": user_id}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            if resp.status not in (200, 201):
+                print(f"[WEB] Failed to create DM: {resp.status}")
+                return
+            data = await resp.json()
+            dm_channel_id = data["id"]
+
+        msg_url = f"https://discord.com/api/v10/channels/{dm_channel_id}/messages"
+        msg_payload = {
+            "content": f"Your compressed video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}\nLink expires in 1 hour.",
+        }
+
+        async with session.post(msg_url, headers=headers, json=msg_payload) as resp:
+            if resp.status not in (200, 204):
+                print(f"[WEB] Failed to send DM: {resp.status}")
+            else:
+                print(f"[WEB] DM sent successfully")

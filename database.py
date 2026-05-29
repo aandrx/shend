@@ -1,3 +1,4 @@
+# database.py
 import aiosqlite
 from config import settings
 
@@ -13,8 +14,10 @@ async def init_db():
                 discord_user_id TEXT NOT NULL,
                 channel_id TEXT NOT NULL,
                 guild_id TEXT NOT NULL,
+                interaction_token TEXT,
+                application_id TEXT,
                 original_filename TEXT,
-                internal_path TEXT,              -- REMOVED NOT NULL
+                internal_path TEXT,
                 original_size_bytes INTEGER,
                 compressed_size_bytes INTEGER,
                 status TEXT DEFAULT 'pending',
