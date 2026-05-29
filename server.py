@@ -61,6 +61,7 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
     user_id = job[1]
     channel_id = job[2]
     mode = job[10]
+    original_name = video.filename or "upload.mp4"
 
     print(f"[WEB] User: {user_id}, Mode: {mode}, Channel: {channel_id}")
 
@@ -77,7 +78,7 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         raise HTTPException(507, "Storage full")
 
     temp_id = uuid.uuid4().hex
-    temp_input = settings.storage_path / "temp" / f"{temp_id}_{video.filename}"
+    temp_input = settings.storage_path / "temp" / f"{temp_id}_{original_name}"
     temp_output = settings.storage_path / "temp" / f"{temp_id}_compressed.mp4"
 
     print(f"[WEB] Saving to temp: {temp_input}")
@@ -106,14 +107,19 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
     size = temp_output.stat().st_size
     print(f"[WEB] Compression complete: {size} bytes ({size / 1024 / 1024:.1f}MB)")
 
+    # Preserve original name for download mode
+    safe_name = "".join(c for c in original_name if c.isalnum() or c in "._-").rstrip()
+    base_name = Path(safe_name).stem
+    output_name = f"{base_name}_downsized.mp4"
+
     if mode == "embed":
         final_path = settings.storage_path / "uploads" / f"{token}.mp4"
         temp_output.rename(final_path)
         print(f"[WEB] Moved to uploads: {final_path}")
 
         await db.execute(
-            "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 0 WHERE token = ?",
-            (str(final_path), size, token),
+            "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 0, original_filename = ? WHERE token = ?",
+            (str(final_path), size, original_name, token),
         )
         await db.commit()
         await db.close()
@@ -122,19 +128,19 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         await post_to_channel(channel_id, token)
 
     else:
-        final_path = settings.storage_path / "temp" / f"{token}.mp4"
+        final_path = settings.storage_path / "temp" / f"{token}_{output_name}"
         temp_output.rename(final_path)
         print(f"[WEB] Kept in temp for download: {final_path}")
 
         await db.execute(
-            "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 1 WHERE token = ?",
-            (str(final_path), size, token),
+            "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 1, original_filename = ? WHERE token = ?",
+            (str(final_path), size, original_name, token),
         )
         await db.commit()
         await db.close()
 
-        print("[WEB] DMing download link to user")
-        await dm_user(user_id, token, size)
+        print("[WEB] Posting download link to Discord channel (ephemeral)")
+        await post_downsize_to_channel(channel_id, user_id, token, output_name, size)
 
     temp_input.unlink(missing_ok=True)
     print("[WEB] Cleaned up temp input")
@@ -207,7 +213,7 @@ async def serve_file(token: str):
 async def download_file(token: str):
     db = await get_db()
     row = await db.execute(
-        "SELECT internal_path FROM uploads WHERE token = ? AND status = 'complete'",
+        "SELECT internal_path, original_filename FROM uploads WHERE token = ? AND status = 'complete'",
         (token,),
     )
     result = await row.fetchone()
@@ -217,14 +223,20 @@ async def download_file(token: str):
         raise HTTPException(404)
 
     file_path = Path(result[0])
+    original_name = result[1] or f"{token}.mp4"
     if not file_path.exists():
         raise HTTPException(404)
+
+    # Use original filename with _downsized for download
+    safe_name = "".join(c for c in original_name if c.isalnum() or c in "._-").rstrip()
+    base_name = Path(safe_name).stem
+    download_name = f"{base_name}_downsized.mp4"
 
     return FileResponse(
         file_path,
         media_type="video/mp4",
-        filename=f"{token}.mp4",
-        headers={"Content-Disposition": f'attachment; filename="{token}.mp4"'},
+        filename=download_name,
+        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
     )
 
 
@@ -246,29 +258,25 @@ async def post_to_channel(channel_id: str, token: str):
                 print(f"[WEB] Posted to channel successfully")
 
 
-async def dm_user(user_id: str, token: str, size: int):
-    url = "https://discord.com/api/v10/users/@me/channels"
+async def post_downsize_to_channel(channel_id: str, user_id: str, token: str, filename: str, size: int):
+    # Post ephemeral message in the same channel where /downsize was called
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
     headers = {
         "Authorization": f"Bot {settings.bot_token}",
         "Content-Type": "application/json",
     }
-    payload = {"recipient_id": user_id}
+    
+    # Use @mention to notify the user privately in channel
+    payload = {
+        "content": f"<@{user_id}> Your video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}",
+        "allowed_mentions": {
+            "users": [user_id]
+        }
+    }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
-            if resp.status not in (200, 201):
-                print(f"[WEB] Failed to create DM: {resp.status}")
-                return
-            data = await resp.json()
-            dm_channel_id = data["id"]
-
-        msg_url = f"https://discord.com/api/v10/channels/{dm_channel_id}/messages"
-        msg_payload = {
-            "content": f"Your compressed video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}\nLink expires in 1 hour.",
-        }
-
-        async with session.post(msg_url, headers=headers, json=msg_payload) as resp:
             if resp.status not in (200, 204):
-                print(f"[WEB] Failed to send DM: {resp.status}")
+                print(f"[WEB] Failed to post downsize to channel: {resp.status}")
             else:
-                print(f"[WEB] DM sent successfully")
+                print(f"[WEB] Posted downsize link to channel successfully")
