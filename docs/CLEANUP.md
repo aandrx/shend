@@ -179,19 +179,6 @@ sudo systemctl restart shend
 
 ---
 
-## Common Issues
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| "Rate limit exceeded" | >10 uploads/hour | Wait 1 hour or increase `RATE_LIMIT_PER_HOUR` in `.env` |
-| "Storage full" | >19.5GB used | Run `clear_archive_older_than(30)` or increase storage |
-| 502 Bad Gateway | Container not running | `sudo systemctl restart shend` |
-| 403 Invalid token | Token expired (15min) | Request new `/upload` or `/downsize` link |
-| Compression fails | Corrupt/non-video file | Check file with `ffprobe` |
-| Bot offline | Token invalid or Discord down | Check `docker logs shend`, verify `BOT_TOKEN` |
-
----
-
 ## Storage Layout
 
 ```
