@@ -17,7 +17,7 @@ Self-hosted Discord bot that compresses large videos to under 10MB and serves th
 | Command | Purpose |
 |---|---|
 | `/upload` | DMs a private upload link. Video compresses and embeds inline in Discord chat. |
-| `/downsize` | DMs a private upload link. Video compresses and posts a download link in the original channel. |
+| `/downsize` | DMs a private upload link. Video compresses and returns a download link privately in the same channel. |
 
 ## Local Development
 
@@ -43,6 +43,39 @@ The bot runs inside a Docker container. The `docker-compose.yml` lives outside t
 - Docker + Docker Compose plugin
 - Tailscale installed and logged in
 - Discord bot token
+
+### Environment Variables
+
+Create `.env` from `.env.example`:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+#### `.env.example`
+
+```bash
+BOT_TOKEN=your_discord_bot_token_here
+BASE_URL=https://your-server.tailxxxxx.ts.net
+STORAGE_PATH=./storage
+DATA_PATH=./data
+MAX_STORAGE_GB=20
+MAX_UPLOAD_MB=500
+TARGET_COMPRESS_MB=9.5
+RATE_LIMIT_PER_HOUR=10
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `BOT_TOKEN` | — | Discord bot token (required) |
+| `BASE_URL` | — | Public HTTPS URL from Tailscale Funnel (required) |
+| `STORAGE_PATH` | `./storage` | Local storage directory |
+| `DATA_PATH` | `./data` | SQLite database directory |
+| `MAX_STORAGE_GB` | `20` | Storage cap in gigabytes |
+| `MAX_UPLOAD_MB` | `500` | Max upload size in megabytes |
+| `TARGET_COMPRESS_MB` | `9.5` | Target compressed file size |
+| `RATE_LIMIT_PER_HOUR` | `10` | Max uploads per user per hour |
 
 ### Docker Compose File
 
@@ -105,53 +138,21 @@ git pull origin main
 sudo systemctl restart shend
 ```
 
-## Environment Variables
-
-| Variable | Description |
-|---|---|
-| `BOT_TOKEN` | Discord bot token |
-| `BASE_URL` | Public HTTPS URL (Tailscale Funnel or ngrok) |
-| `STORAGE_PATH` | Local storage directory |
-| `DATA_PATH` | SQLite database directory |
-| `MAX_STORAGE_GB` | Storage cap (default 20) |
-| `MAX_UPLOAD_MB` | Max upload size (default 500) |
-| `TARGET_COMPRESS_MB` | Compression target (default 9.5) |
-| `RATE_LIMIT_PER_HOUR` | Uploads per user per hour (default 3) |
-
 ## Maintenance
 
-Run maintenance commands inside the container or locally.
+See [CLEANUP.md](CLEANUP.md) for full maintenance instructions.
 
-### Check Storage Usage
-
-```bash
-cd /home/rue/shend
-source venv/bin/activate  # Skip if running in container
-python -c "from maintenance import print_storage_stats; print_storage_stats()"
-```
-
-### Clear Temp Files
+### Quick Commands
 
 ```bash
-python -c "from maintenance import clear_temp; clear_temp()"
-```
+# Check storage usage
+docker exec shend python -c "from maintenance import print_storage_stats; print_storage_stats()"
 
-### Clear Old Uploads (default: older than 7 days)
+# Clear temp files
+docker exec shend python -c "from maintenance import clear_temp; clear_temp()"
 
-```bash
-python -c "from maintenance import clear_uploads_older_than; clear_uploads_older_than(7)"
-```
-
-### Clear Old Archive (default: older than 90 days)
-
-```bash
-python -c "from maintenance import clear_archive_older_than; clear_archive_older_than(90)"
-```
-
-### Full Cleanup (temp + old uploads + old archive + orphan DB rows)
-
-```bash
-python -c "import asyncio; from maintenance import run_full_cleanup; asyncio.run(run_full_cleanup())"
+# Full cleanup
+docker exec shend python -c "import asyncio; from maintenance import run_full_cleanup; asyncio.run(run_full_cleanup())"
 ```
 
 ### Automated Cleanup
@@ -177,7 +178,7 @@ data/
 ## Security
 
 - File type validation via magic numbers (not extensions)
-- Per-user rate limiting (3 uploads/hour)
+- Per-user rate limiting (default: 10 uploads/hour)
 - Disk pressure guard (rejects uploads if >19.5GB used)
 - Single-use upload tokens (expire in 15 minutes)
 - Files stored as UUIDs internally; original names only in DB
@@ -211,3 +212,14 @@ cd /home/rue/shend
 git pull origin main
 sudo systemctl restart shend
 ```
+
+## Common Issues
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Rate limit exceeded" | >10 uploads/hour | Wait 1 hour or increase `RATE_LIMIT_PER_HOUR` in `.env` |
+| "Storage full" | >19.5GB used | Run cleanup or increase `MAX_STORAGE_GB` |
+| 502 Bad Gateway | Container not running | `sudo systemctl restart shend` |
+| 403 Invalid token | Token expired (15min) | Request new `/upload` or `/downsize` link |
+| Compression fails | Corrupt/non-video file | Check file with `ffprobe` |
+| Bot offline | Token invalid or Discord down | Check `docker logs shend`, verify `BOT_TOKEN` |

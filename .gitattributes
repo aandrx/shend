@@ -1,0 +1,15 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+
+# Binary files
+*.mp4 binary
+*.avi binary
+*.mov binary

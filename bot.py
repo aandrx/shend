@@ -3,6 +3,8 @@ import discord
 from discord.ext import commands
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
+import traceback
 
 from config import settings
 from database import get_db, init_db
@@ -12,6 +14,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Track bot startup time for uptime calculation
+BOT_START_TIME = datetime.utcnow()
 
 
 @bot.event
@@ -151,6 +156,65 @@ async def downsize(interaction: discord.Interaction):
             )
         except:
             pass
+
+
+async def get_bot_status(user_id: str | None = None):
+    """Gather simple bot status metrics."""
+    try:
+        uptime = datetime.utcnow() - BOT_START_TIME
+        uptime_str = f"{uptime.days}d {uptime.seconds // 3600}h {(uptime.seconds % 3600) // 60}m"
+
+        storage_path = settings.storage_path
+        total_size = sum(f.stat().st_size for f in storage_path.rglob("*") if f.is_file())
+        used_gb = total_size / (1024 ** 3)
+        max_gb = settings.max_storage_gb
+        usage_percent = (used_gb / max_gb) * 100 if max_gb > 0 else 0
+
+        db = await get_db()
+        
+        stats_row = await db.execute(
+            "SELECT status, COUNT(*) as count FROM uploads GROUP BY status"
+        )
+        stats = await stats_row.fetchall()
+        status_counts = {row[0]: row[1] for row in stats}
+        
+        total_videos = sum(status_counts.values())
+        
+        await db.close()
+
+        return {
+            "uptime": uptime_str,
+            "storage_used_gb": round(used_gb, 2),
+            "storage_max_gb": max_gb,
+            "storage_percent": round(usage_percent, 1),
+            "total_videos": total_videos,
+            "videos_complete": status_counts.get("complete", 0),
+        }
+    except Exception as e:
+        print(f"[STATUS] Error gathering metrics: {e}")
+        traceback.print_exc()
+        return None
+
+
+@bot.tree.command(name="status", description="View bot status")
+async def status(interaction: discord.Interaction):
+    """Show a simple one-line bot status."""
+    if interaction.user is None:
+        return
+
+    try:
+        await interaction.response.defer()
+        status_data = await get_bot_status()
+        
+        if not status_data:
+            await interaction.followup.send("Failed to get status.")
+            return
+
+        msg = f"**Shend Status** - Uptime: {status_data['uptime']} | Storage: {status_data['storage_used_gb']}/{status_data['storage_max_gb']} GB ({status_data['storage_percent']}%) | Videos: {status_data['total_videos']} ({status_data['videos_complete']} complete)"
+        await interaction.followup.send(msg)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error: {e}")
 
 
 def run_bot():
