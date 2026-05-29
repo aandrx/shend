@@ -35,6 +35,9 @@ async def on_ready():
 
 @bot.tree.command(name="upload", description="Get a link to upload a video that embeds inline in chat")
 async def upload(interaction: discord.Interaction):
+    if interaction.user is None or interaction.channel is None:
+        return
+
     print(f"[CMD] /upload triggered by {interaction.user.id}")
     
     try:
@@ -55,7 +58,14 @@ async def upload(interaction: discord.Interaction):
         
         await db.execute(
             "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-            (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "embed"),
+            (
+                token,
+                str(interaction.user.id),
+                str(interaction.channel.id),
+                str(interaction.guild_id) if interaction.guild_id is not None else None,
+                expires,
+                "embed",
+            ),
         )
         print("[CMD] Executed INSERT")
         
@@ -87,6 +97,9 @@ async def upload(interaction: discord.Interaction):
 
 @bot.tree.command(name="downsize", description="Get a link to upload a large video and receive a <10MB download")
 async def downsize(interaction: discord.Interaction):
+    if interaction.user is None or interaction.channel is None:
+        return
+
     print(f"[CMD] /downsize triggered by {interaction.user.id}")
     
     try:
@@ -107,7 +120,14 @@ async def downsize(interaction: discord.Interaction):
         
         await db.execute(
             "INSERT INTO uploads (token, discord_user_id, channel_id, guild_id, expires_at, mode) VALUES (?,?,?,?,?,?)",
-            (token, str(interaction.user.id), str(interaction.channel.id), str(interaction.guild_id), expires, "download"),
+            (
+                token,
+                str(interaction.user.id),
+                str(interaction.channel.id),
+                str(interaction.guild_id) if interaction.guild_id is not None else None,
+                expires,
+                "download",
+            ),
         )
         print("[CMD] Executed INSERT")
         

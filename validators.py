@@ -17,10 +17,11 @@ async def check_rate_limit(user_id: str) -> bool:
     cutoff = datetime.utcnow() - timedelta(hours=1)
     async with aiosqlite.connect(DB_PATH) as db:
         row = await db.execute(
-            "SELECT COUNT(*) FROM uploads WHERE discord_user_id = ? AND created_at > ?",
+            "SELECT COUNT(*) FROM uploads WHERE discord_user_id = ? AND created_at > ? AND status = 'complete'",
             (user_id, cutoff),
         )
-        count = (await row.fetchone())[0]
+        result = await row.fetchone()
+        count = result[0] if result is not None else 0
         return count < settings.rate_limit_per_hour
 
 

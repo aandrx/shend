@@ -12,9 +12,11 @@
         input[type="file"] { display: none; }
         button { background: #5865F2; color: white; border: none; padding: 15px 30px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-top: 20px; }
         button:disabled { background: #444; cursor: not-allowed; }
-        #status { margin-top: 20px; padding: 15px; border-radius: 5px; display: none; }
+        #status { margin-top: 10px; padding: 15px; border-radius: 5px; display: none; }
         .success { background: #2d7d46; }
         .error { background: #8b2e2e; }
+        #log { margin-top: 20px; padding: 10px; background: #2a2a2a; border-radius: 5px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; }
+        #log div { margin: 2px 0; }
     </style>
 </head>
 <body>
@@ -29,6 +31,7 @@
         <button type="submit" id="submitBtn">Upload & Compress</button>
     </form>
 
+    <div id="log"></div>
     <div id="status"></div>
 
     <script>
@@ -37,36 +40,63 @@
         const form = document.getElementById('uploadForm');
         const btn = document.getElementById('submitBtn');
         const status = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+
+        function log(msg) {
+            const line = document.createElement('div');
+            line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+            logDiv.appendChild(line);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
 
         dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.style.background = '#2a2a2a'; });
         dropzone.addEventListener('dragleave', () => { dropzone.style.background = ''; });
-        dropzone.addEventListener('drop', (e) => { e.preventDefault(); fileInput.files = e.dataTransfer.files; dropzone.querySelector('p').textContent = e.dataTransfer.files[0].name; });
+        dropzone.addEventListener('drop', (e) => { 
+            e.preventDefault(); 
+            fileInput.files = e.dataTransfer.files; 
+            dropzone.querySelector('p').textContent = e.dataTransfer.files[0].name; 
+        });
 
         fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) dropzone.querySelector('p').textContent = fileInput.files[0].name;
+            if (fileInput.files.length > 0) {
+                const f = fileInput.files[0];
+                dropzone.querySelector('p').textContent = f.name;
+                log('Selected: ' + f.name + ' (' + (f.size / 1024 / 1024).toFixed(1) + 'MB)');
+            }
         });
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            log('Starting upload...');
             btn.disabled = true;
-            btn.textContent = 'Compressing...';
+            btn.textContent = 'Uploading...';
             status.style.display = 'none';
 
             const formData = new FormData(form);
+            const file = fileInput.files[0];
+            log('File: ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + 'MB)');
+            
             try {
+                log('Sending to server...');
                 const res = await fetch(form.action, { method: 'POST', body: formData });
+                log('Server responded: ' + res.status);
+                
                 const data = await res.json();
                 if (res.ok) {
                     status.className = 'success';
                     status.textContent = 'Upload complete! Check Discord for the result.';
+                    log('Success! URL: ' + data.url);
                 } else {
                     status.className = 'error';
                     status.textContent = 'Error: ' + (data.detail || 'Unknown error');
+                    log('Error: ' + (data.detail || 'Unknown error'));
                 }
             } catch (err) {
                 status.className = 'error';
                 status.textContent = 'Network error: ' + err.message;
+                log('Network error: ' + err.message);
             }
+            
             status.style.display = 'block';
             btn.disabled = false;
             btn.textContent = 'Upload & Compress';

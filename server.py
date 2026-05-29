@@ -43,6 +43,9 @@ async def upload_form(request: Request, token: str = Query(...)):
 
 @app.post("/upload")
 async def upload_receive(token: str = Query(...), video: UploadFile = File(...)):
+    print(f"[WEB] Upload started for token: {token}")
+    print(f"[WEB] File: {video.filename}, size: {video.size} bytes")
+
     db = await get_db()
     row = await db.execute(
         "SELECT * FROM uploads WHERE token = ? AND status = 'pending' AND expires_at > ?",
@@ -52,17 +55,24 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
 
     if not job:
         await db.close()
+        print("[WEB] Token invalid or expired")
         raise HTTPException(403, "Invalid or expired token")
 
     user_id = job[1]
     channel_id = job[2]
-    mode = job[10]  # mode column index
+    mode = job[10]
 
-    if not await check_rate_limit(user_id):
+    print(f"[WEB] User: {user_id}, Mode: {mode}, Channel: {channel_id}")
+
+    rate_ok = await check_rate_limit(user_id)
+    print(f"[WEB] Rate limit check: allowed={rate_ok}")
+    if not rate_ok:
         await db.close()
         raise HTTPException(429, "Rate limit exceeded")
 
-    if not check_disk_pressure():
+    disk_ok = check_disk_pressure()
+    print(f"[WEB] Disk pressure check: ok={disk_ok}")
+    if not disk_ok:
         await db.close()
         raise HTTPException(507, "Storage full")
 
@@ -70,17 +80,23 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
     temp_input = settings.storage_path / "temp" / f"{temp_id}_{video.filename}"
     temp_output = settings.storage_path / "temp" / f"{temp_id}_compressed.mp4"
 
+    print(f"[WEB] Saving to temp: {temp_input}")
     content = await video.read()
+    print(f"[WEB] Read {len(content)} bytes from upload")
+
     if not validate_magic(content):
         await db.close()
+        print("[WEB] Magic number validation failed")
         raise HTTPException(400, "Invalid file type")
 
     temp_input.write_bytes(content)
+    print(f"[WEB] Saved temp file")
 
-    # Compress
+    print("[WEB] Starting FFmpeg compression...")
     try:
         await compress_to_target(temp_input, temp_output)
     except Exception as e:
+        print(f"[WEB] Compression failed: {e}")
         await db.execute("UPDATE uploads SET status = 'failed' WHERE token = ?", (token,))
         await db.commit()
         await db.close()
@@ -88,12 +104,12 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         raise HTTPException(500, f"Compression failed: {e}")
 
     size = temp_output.stat().st_size
+    print(f"[WEB] Compression complete: {size} bytes ({size / 1024 / 1024:.1f}MB)")
 
-    # Branch based on mode
     if mode == "embed":
-        # /upload: move to uploads dir, post viewer link in channel
         final_path = settings.storage_path / "uploads" / f"{token}.mp4"
         temp_output.rename(final_path)
+        print(f"[WEB] Moved to uploads: {final_path}")
 
         await db.execute(
             "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 0 WHERE token = ?",
@@ -102,12 +118,13 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         await db.commit()
         await db.close()
 
+        print("[WEB] Posting viewer link to Discord channel")
         await post_to_channel(channel_id, token)
 
     else:
-        # /downsize: keep in temp, DM download link to user, mark for cleanup
         final_path = settings.storage_path / "temp" / f"{token}.mp4"
         temp_output.rename(final_path)
+        print(f"[WEB] Kept in temp for download: {final_path}")
 
         await db.execute(
             "UPDATE uploads SET status = 'complete', internal_path = ?, compressed_size_bytes = ?, is_temp = 1 WHERE token = ?",
@@ -116,11 +133,15 @@ async def upload_receive(token: str = Query(...), video: UploadFile = File(...))
         await db.commit()
         await db.close()
 
+        print("[WEB] DMing download link to user")
         await dm_user(user_id, token, size)
 
     temp_input.unlink(missing_ok=True)
+    print("[WEB] Cleaned up temp input")
 
-    return {"status": "complete", "url": f"{settings.base_url}/v/{token}" if mode == "embed" else f"{settings.base_url}/d/{token}"}
+    result_url = f"{settings.base_url}/v/{token}" if mode == "embed" else f"{settings.base_url}/d/{token}"
+    print(f"[WEB] Done. Result URL: {result_url}")
+    return {"status": "complete", "url": result_url}
 
 
 @app.get("/v/{token}", response_class=HTMLResponse)
@@ -220,11 +241,12 @@ async def post_to_channel(channel_id: str, token: str):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status not in (200, 204):
-                print(f"Failed to post to channel: {resp.status}")
+                print(f"[WEB] Failed to post to channel: {resp.status}")
+            else:
+                print(f"[WEB] Posted to channel successfully")
 
 
 async def dm_user(user_id: str, token: str, size: int):
-    # Create DM channel first
     url = "https://discord.com/api/v10/users/@me/channels"
     headers = {
         "Authorization": f"Bot {settings.bot_token}",
@@ -235,12 +257,11 @@ async def dm_user(user_id: str, token: str, size: int):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status not in (200, 201):
-                print(f"Failed to create DM: {resp.status}")
+                print(f"[WEB] Failed to create DM: {resp.status}")
                 return
             data = await resp.json()
             dm_channel_id = data["id"]
 
-        # Send message with download link
         msg_url = f"https://discord.com/api/v10/channels/{dm_channel_id}/messages"
         msg_payload = {
             "content": f"Your compressed video is ready! ({size / 1024 / 1024:.1f}MB)\nDownload: {settings.base_url}/d/{token}\nLink expires in 1 hour.",
@@ -248,4 +269,6 @@ async def dm_user(user_id: str, token: str, size: int):
 
         async with session.post(msg_url, headers=headers, json=msg_payload) as resp:
             if resp.status not in (200, 204):
-                print(f"Failed to send DM: {resp.status}")
+                print(f"[WEB] Failed to send DM: {resp.status}")
+            else:
+                print(f"[WEB] DM sent successfully")
