@@ -1,5 +1,7 @@
 # shend
 
+## to solve the long lost 10mb discord upload all time hated problem
+
 Self-hosted Discord bot that compresses large videos to under 10MB and serves them back as inline embeds or direct downloads. Runs 24/7 on a home server without port forwarding.
 
 ## Stack
