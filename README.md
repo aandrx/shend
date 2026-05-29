@@ -18,9 +18,9 @@ Self-hosted Discord bot that compresses large videos to under 10MB and serves th
 
 | Command | Purpose |
 |---|---|
-| `/upload` | DMs a private upload link. Video compresses and embeds inline in Discord chat. |
-| `/downsize` | DMs a private upload link. Video compresses and returns a download link privately in the same channel. |
-| `/status` | Messages a status update with uptime, storage usage, and video count. |
+| `/upload` | private upload link -> compresses video and embeds inline in chat |
+| `/downsize` | private upload link -> compresses video and returns download link privately in DMs |
+| `/status` | messages status update with uptime, storage usage, and video count |
 
 ## Local Development
 
